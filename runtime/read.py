@@ -58,8 +58,13 @@ def main():
     sub.add_parser("serve", help="Read one retrieval request per stdin line; emit one JSON response.")
     args = vars(parser.parse_args())
     root, action = args.pop("root"), args.pop("action")
-    config = load_config(root)
-    runtime = ReadingRuntime(config)
+    try:
+        config = load_config(root)
+        runtime = ReadingRuntime(config)
+    except ReadingError as exc:
+        emit({"schema_version": 1, "status": "blocked",
+              "error": {"code": exc.code, "message": str(exc)}})
+        return 2
     if action == "serve":
         for line in sys.stdin:
             if not line.strip():

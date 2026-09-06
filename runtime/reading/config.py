@@ -43,6 +43,10 @@ def load_config(root):
     except (OSError, ValueError):
         raise ReadingError("config_missing",
                            "A .reading/book.json descriptor is required in the workspace.") from None
+    if isinstance(state, dict) and type(state.get("version")) is int and state["version"] != 1:
+        raise ReadingError("config_version",
+                           f"book.json declares version {state['version']}; this runtime reads version 1. "
+                           "Update the skill, or the descriptor, so the two agree.")
     try:
         documents = state["documents"]
         page_range = state["page_range"]
