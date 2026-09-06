@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "title": "REPLACE — the book's title",
+  "note": "notes/REPLACE.md",
+  "documents": {
+    "text": "source/REPLACE_original.txt",
+    "translation": "source/REPLACE_translation.txt"
+  },
+  "page_range": [1, 999],
+  "calibration": null,
+  "alignment": "source/REPLACE_align.json",
+  "part_marker": null,
+  "annotations": null
+}
