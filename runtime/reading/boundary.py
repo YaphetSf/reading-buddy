@@ -133,14 +133,21 @@ class Boundary:
     page_complete: bool
     documents: dict
     state_checksum: str
+    page_corroborated: bool = True
 
     @property
     def wiki_ceiling(self):
         return self.page if self.page_complete else self.page - 1
 
     def summary(self):
-        return {"page": self.page, "page_complete": self.page_complete,
-                "boundary": "exact_text", "revision": self.documents["text"].revision}
+        # page is whatever the reader reported. Without calibration nothing checks it,
+        # so say so beside the value rather than leaving it to look like measured progress.
+        summary = {"page": self.page, "page_complete": self.page_complete,
+                   "boundary": "exact_text", "revision": self.documents["text"].revision}
+        if not self.page_corroborated:
+            summary["page_is_advisory"] = True
+            summary["position_truth"] = "exact_text boundary; read `current` to see it"
+        return summary
 
 
 def load_boundary(config):
@@ -190,7 +197,8 @@ def load_boundary(config):
     except (KeyError, TypeError, ValueError):
         raise ReadingError("boundary_stale",
                            "Bookmark metadata or source changed. Re-anchor before retrieving text.") from None
-    return Boundary(state["page"], state["page_complete"], documents, digest(raw))
+    return Boundary(state["page"], state["page_complete"], documents, digest(raw),
+                    page_corroborated=bool(config.calibration))
 
 
 def _atomic_write(path, payload):

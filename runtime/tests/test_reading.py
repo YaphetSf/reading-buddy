@@ -215,6 +215,18 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(self.request("search", query="cobalt")["status"], "ok")
         self.assertEqual(self.request("page", page=40)["error"]["code"], "page_map_unavailable")
 
+    def test_uncalibrated_page_is_marked_advisory(self):
+        # A book with no calibration can sit at a nominal page forever while the
+        # exact boundary advances; the summary must not let that read as progress.
+        self.assertNotIn("page_is_advisory", self.request("status")["bookmark"])
+        book = json.loads((self.root / ".reading/book.json").read_text())
+        book["calibration"] = None
+        (self.root / ".reading/book.json").write_text(json.dumps(book))
+        summary = ReadingRuntime(load_config(self.root)).request({"action": "status"})["bookmark"]
+        self.assertTrue(summary["page_is_advisory"])
+        self.assertIn("exact_text", summary["position_truth"])
+        self.assertEqual(summary["page"], self.request("status")["bookmark"]["page"])
+
     def test_translation_requires_independent_boundary(self):
         (self.root / "source/book_zh.txt").write_text("原文不能用英文页码截断。UNREAD_SENTINEL")
         self.assertEqual(self.request("search", query="原文", source="translation")["error"]["code"],

@@ -18,6 +18,14 @@ never estimate a safe cutoff, never fall back to memory, never read the corpus d
 If the workspace has no `.reading/book.json`, this is a new book: read
 `references/setup.md` and run the setup wizard.
 
+The position truth is the `exact_text` boundary, never the `page` number. `page` is
+only what the reader last told you, and when the summary carries `page_is_advisory`
+(or `page_lookup` is `unavailable`) nothing corroborates it — a book with no
+calibration may sit at a nominal page 1 forever while the boundary advances. Read
+`current` to see where the reader actually is. Never use `page` to infer, question or
+correct their position, and never ask them to re-report a position the boundary
+already covers.
+
 ## The boundary
 
 `.reading/bookmark.json` is the single reading truth. It is runtime-owned:
