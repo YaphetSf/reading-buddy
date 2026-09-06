@@ -1,6 +1,6 @@
 ---
 name: reading-buddy
-description: Spoiler-bounded companion for reading a long book. Retrieves original text, translation and page annotations strictly up to the reader's exact bookmark, and keeps a reading log. Use when discussing a book the user is partway through, when they report reading progress or a new bookmark, when they ask what happened in a scene, when a book workspace contains .reading/book.json, or when setting up a new book to read this way.
+description: Spoiler-bounded companion for reading a long book. Retrieves original text, translation and page annotations strictly up to the reader's exact bookmark, and keeps a reading log. Use when discussing a book the user is partway through, when they report reading progress or a new bookmark, when they ask what happened in a scene, when a book workspace contains .reading/book.json, when setting up a new book to read this way, or when they ask it to catch up or recap its own running summary.
 ---
 
 # Reading Buddy
@@ -11,9 +11,12 @@ is the leak, not the source.
 
 ## Before anything else
 
-Run `status`. It reports the bookmark, which sources are anchored, and whether page
-lookup is available. If it returns `blocked`, resolve the boundary with the reader —
-never estimate a safe cutoff, never fall back to memory, never read the corpus directly.
+Run `status`. It reports the bookmark, which sources are anchored, whether page
+lookup is available, and the state of your running summary. If it returns
+`blocked`, resolve the boundary with the reader — never estimate a safe cutoff,
+never fall back to memory, never read the corpus directly. If `status` reports
+an available summary, run `summary` and load it: those entries are your memory
+of the book between sessions. The corpus is not.
 
 If the workspace has no `.reading/book.json`, this is a new book: read
 `references/setup.md` and run the setup wizard.
@@ -34,8 +37,8 @@ written only by the `bookmark` command, never hand-edited.
 - Stop where the reader stopped, **in page order, not chronological order**. On a
   partly read page, stop at the last-read quotation, including mid-sentence.
 - Possessing the files does not relax the boundary. Do not grep or open the corpus,
-  the translation, a cross-bookmark annotation file, or an unbounded index. Query
-  through the runtime, which serves only the permitted slice.
+  the translation, a cross-bookmark annotation file, the summary file, or an
+  unbounded index. Query through the runtime, which serves only the permitted slice.
 - A no-match answer means no match *in the permitted scope*. Never search unread
   text to decide whether something occurs later, and never report that it does.
 - Never let later knowledge leak backwards. "First appearance of X" claims must be
@@ -54,7 +57,7 @@ explicitly asks for interpretation — and then still bounded — do not produce
 - forward framing of any kind ("you'll see", "this pays off later");
 - critic's jargon applied to on-page material.
 
-Notes obey the same rules as conversation.
+Notes and your own summary entries obey the same rules as conversation.
 
 ## A sitting
 
@@ -78,7 +81,38 @@ When the reader reports new progress:
 1. `bookmark --page N --after "<exact last-read words>"`, `--page-complete` only if
    they finished that page. Never advance without their report.
 2. Re-anchor the translation if the book has one (see below).
-3. Add a reading-log row and sync the running summary note — facts only, new scope only.
+3. Append the newly read slice to your own summary (see below).
+4. Add a reading-log row and sync the running summary note — facts only, new scope only.
+
+## The agent's own summary
+
+`.reading/summary.json` is your memory between sessions: runtime-owned entries
+summarizing the original text in reading order. It loads with `summary`, and its
+entries are claims with coordinates — before telling the reader anything an
+entry asserts, ground it in retrieved original text. Commentary, never narrative
+fact.
+
+When the summary trails the bookmark — first setup, a long gap, or the reader
+asks you to catch up — read the un-summarized stretch for real and summarize it
+as you go, one entry per slice:
+
+    python3 $RB/read.py range --from 0 --to 12000
+    python3 $RB/read.py summary --append "<what happened in that slice>"
+
+Each `--append` stamps the next un-summarized slice (about 12000 characters) as
+one level-0 entry; the response says `caught_up` when you reach the bookmark.
+Read a slice with `range` before writing its entry — never summarize from
+memory, and never summarize from old entries alone.
+
+When `summary` reports `over_budget`, compress: re-read the span being merged,
+then replace a run of entries with one coarser entry.
+
+    python3 $RB/read.py summary --replace 1-6 --level 1 --text "..."
+
+Show the reader the affected entries and your replacement before replacing.
+The runtime keeps a one-generation backup, but the review is the protocol —
+compression is where a fabricated detail would become consensus. Resolution is
+a gradient: coarse far from the bookmark, fine near it.
 
 ## Translation re-anchoring
 

@@ -6,6 +6,7 @@ import sqlite3
 import unicodedata
 
 from .boundary import ReadingError, digest, fold, load_boundary, normalized_spans
+from . import summary as running_summary
 from .sources import PageMap, Passage, text_passages, wiki_passages
 
 
@@ -62,6 +63,7 @@ class _Snapshot:
 
     def status(self):
         return {"status": "ok", "bookmark": self.boundary.summary(),
+                "summary": running_summary.status_info(self.config, self.boundary),
                 "sources": {
                     "text": {"available": True, "allowed_characters": len(self.documents["text"].text)},
                     "wiki": {"available": bool(self.wiki), "policy": "complete_ranges_only",
@@ -269,6 +271,32 @@ class _Snapshot:
                 "location_is_estimated": True, "results": [item],
                 "returned_characters": len(item["text"]), "max_chars": budget}
 
+    def range(self, from_offset=0, to_offset=0, max_chars=12000):
+        """In-order reading of the allowed slice, for catch-up and compression re-reads."""
+        document = self.documents["text"]
+        start = integer(from_offset, "from", 0, 2 ** 31)
+        end = integer(to_offset, "to", 1, 2 ** 31)
+        if start >= end:
+            raise ReadingError("invalid_request", "from must be below to.")
+        budget = integer(max_chars, "max_chars", 64, 12000)
+        if start >= document.end:
+            raise ReadingError("outside_bookmark", "Nothing to read past the bookmark; `current` shows the tail.")
+        lo = max(document.start, start)
+        hi = min(document.end, end, lo + budget)
+        text = document.text[lo - document.start:hi - document.start]
+        if self.config.part_marker_source:
+            text = re.sub(self.config.part_marker_source, "", text)
+        return {"status": "ok", "bookmark": self.boundary.summary(),
+                "citation": {"path": document.path, "chars": [lo, hi]},
+                "page_estimate": self.pages.page_at(lo),
+                "allowed_end": document.end, "truncated": hi < end,
+                "text": text, "returned_characters": len(text), "max_chars": budget}
+
+    def summary(self, markdown=False):
+        if not isinstance(markdown, bool):
+            raise ReadingError("invalid_request", "markdown must be a boolean.")
+        return running_summary.read_summary(self.config, markdown=markdown)
+
 
 class ReadingRuntime:
     """One JSON object in/out. Every request revalidates the on-disk bookmark."""
@@ -279,6 +307,8 @@ class ReadingRuntime:
         "read": {"reference", "before", "after", "max_chars"},
         "current": {"source", "max_chars"},
         "page": {"page", "max_chars"},
+        "range": {"from", "to", "max_chars"},
+        "summary": {"markdown"},
     }
 
     def __init__(self, config):
@@ -297,9 +327,14 @@ class ReadingRuntime:
             for key in {"source", "mode", "order"} & set(kwargs):
                 if not isinstance(kwargs[key], str):
                     raise ReadingError("invalid_request", f"{key} must be a string.")
-            required = {"search": "query", "read": "reference", "page": "page"}.get(action)
-            if required and required not in kwargs:
-                raise ReadingError("invalid_request", f"Missing {required}.")
+            required = {"search": {"query"}, "read": {"reference"}, "page": {"page"},
+                        "range": {"from", "to"}}.get(action, set())
+            missing = sorted(required - set(kwargs))
+            if missing:
+                raise ReadingError("invalid_request", f"Missing {missing[0]}.")
+            if action == "range":
+                kwargs["from_offset"] = kwargs.pop("from")
+                kwargs["to_offset"] = kwargs.pop("to")
             snapshot = _Snapshot(self.config)
             response = getattr(snapshot, action)(**kwargs)
             snapshot.assert_current()

@@ -9,6 +9,7 @@ import sys
 from reading.boundary import ReadingError, set_bookmark
 from reading.config import load_config
 from reading.runtime import ReadingRuntime
+from reading.summary import append_summary, replace_summary
 from reading.sync import probe
 
 
@@ -36,7 +37,21 @@ def main():
     current.add_argument("--source", choices=["text", "translation"], default="text")
     page = sub.add_parser("page", help="Find an estimated page location inside the bookmark.")
     page.add_argument("page", type=int)
-    for command, default in [(search, 6000), (read, 6000), (current, 2500), (page, 2500)]:
+    range_parser = sub.add_parser("range", help="Read the allowed slice in order, from one offset to another.")
+    range_parser.add_argument("--from", type=int, required=True, help="Start offset (original characters).")
+    range_parser.add_argument("--to", type=int, required=True,
+                              help="End offset; values past the bookmark are clamped to it.")
+    summary = sub.add_parser("summary", help="Read or maintain the agent-owned running summary.")
+    summary.add_argument("--append", metavar="TEXT",
+                         help="Summarize the next un-summarized slice, in reading order.")
+    summary.add_argument("--replace", metavar="I-J",
+                         help="Merge visible entries I–J into one coarser entry.")
+    summary.add_argument("--level", type=int, help="Resolution of a --replace entry: 0 fine, 2 coarse.")
+    summary.add_argument("--text", help="Replacement entry text (required with --replace).")
+    summary.add_argument("--markdown", action="store_true",
+                         help="Also export visible entries as Markdown for human review.")
+    for command, default in [(search, 6000), (read, 6000), (current, 2500), (page, 2500),
+                             (range_parser, 12000)]:
         command.add_argument("--max-chars", type=int, default=default,
                              help="Total returned excerpt characters, excluding JSON metadata.")
     bookmark = sub.add_parser("bookmark", help="Explicitly set the last position the user has read.")
@@ -92,6 +107,21 @@ def main():
         except ReadingError as exc:
             response = {"schema_version": 1, "status": "blocked",
                         "error": {"code": exc.code, "message": str(exc)}}
+    elif action == "summary" and (args["append"] is not None or args["replace"] is not None):
+        # A bookmark-adjacent write, deliberately outside the retrieval transport.
+        try:
+            if args["append"] is not None:
+                if any(args[key] is not None for key in ("replace", "level", "text")):
+                    raise ReadingError("invalid_request", "--append takes no other summary flags.")
+                response = {"schema_version": 1, **append_summary(config, args["append"])}
+            else:
+                response = {"schema_version": 1,
+                            **replace_summary(config, args["replace"], args["level"], args["text"])}
+        except ReadingError as exc:
+            response = {"schema_version": 1, "status": "blocked",
+                        "error": {"code": exc.code, "message": str(exc)}}
+    elif action == "summary":
+        response = runtime.request({"action": "summary", "markdown": args["markdown"]})
     else:
         response = runtime.request({"action": action, **args})
     emit(response)

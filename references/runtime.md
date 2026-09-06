@@ -13,7 +13,7 @@ database are needed.
 Workspace layout — the app is shared, everything else is per-book:
 
     <skill>/runtime/   the app: shared, book-agnostic, upgraded in one place
-    .reading/      per-book config + state: book.json, bookmark.json
+    .reading/      per-book config + state: book.json, bookmark.json, summary.json
     notes/             projection + reading log: human notes, never read back
     source/            data: corpus, calibration, alignment, annotations (gitignored)
 
@@ -32,10 +32,15 @@ Run from the book workspace:
     python3 $RB/read.py search "<an annotated term>" --source wiki
     python3 $RB/read.py search "<terms>" --source text --order reading --limit 3
     python3 $RB/read.py page 60 --max-chars 2000
+    python3 $RB/read.py range --from 0 --to 12000
     python3 $RB/read.py read "<returned id>" --before 800 --after 800
+    python3 $RB/read.py summary
 
 - Start a sitting with status and current. Search for a specific passage before
   explaining it; request more context using its returned id.
+- `range` reads the allowed slice in order between two offsets, for catch-up
+  summaries and compression re-reads. `summary` loads the running summary
+  (see below).
 - Default search requires all words. Use mode any for alternatives or phrase for
   quotations. Phrase matching tolerates line wrapping, case, typographic quotes
   and Unicode compatibility characters.
@@ -112,6 +117,37 @@ and reports progress in the original language only. After every original bookmar
   remembers the last synced pair. Each new translation stop must follow the
   last one; rewinding either language is rejected.
 
+## The running summary
+
+`.reading/summary.json` is the agent's memory between sessions: model-authored
+entries under runtime custody. The runtime owns every coordinate — the agent
+supplies only prose.
+
+    python3 $RB/read.py summary
+    python3 $RB/read.py summary --append "<what happened in that slice>"
+    python3 $RB/read.py summary --replace I-J --level N --text "<coarser entry>"
+    python3 $RB/read.py summary --markdown
+
+- Entries tile the original text contiguously from the first body character.
+  `--append` stamps the next un-summarized slice (about 12000 characters) as
+  one level-0 entry and reports `caught_up` at the bookmark. Feeding the loop
+  is `range`, which reads the allowed slice in order; read a slice before
+  writing its entry — never summarize from memory.
+- Entries whose span reaches past the current boundary are hidden, not deleted:
+  a bookmark rollback needs no cleanup, and entries resurface as reading
+  advances past them. A changed text source marks the whole file stale until
+  the summary is rebuilt.
+- `summary_budget` in book.json (default 12000 characters) bounds the total.
+  Over budget, the response says so and suggests the oldest contiguous run of
+  fine-grained entries to merge. Compression is the agent's work: re-read the
+  span with `range`, then `--replace` a run of entries with one coarser entry
+  at a higher level. `--replace` writes a one-generation `summary.json.bak`
+  first; the protocol requires showing the reader the replacement before
+  committing it.
+- `--markdown` exports the visible entries for human review, bounded exactly
+  like the read. The summary is never searched as text, never a retrieval
+  boundary, and its entries are claims with coordinates, not narrative facts.
+
 ## Boundary guarantees and limits
 
 1. Source hashes, exact offsets and anchor text are validated before retrieval.
@@ -125,6 +161,9 @@ and reports progress in the original language only. After every original bookmar
    suppressed counts or locations are reported.
 5. Every request, including each request to a long-running transport, reloads
    the bookmark file. Returned ids expire when their allowed source revision changes.
+6. Summary entries beyond the boundary are hidden and a stale source checksum
+   blocks the whole summary. Entry text is commentary; it never authorizes
+   access and never substitutes for retrieved text.
 
 These are guarantees of this retrieval interface, not an operating-system
 sandbox. An agent with direct filesystem access can bypass it, and the model's
@@ -139,9 +178,10 @@ One request per stdin line:
 
     {"action":"search","query":"<terms>","source":"text","limit":3,"max_chars":2400}
 
-Actions: status, search, read, current, page. Parameters have the same names as
-the CLI, with underscores. Bookmark changes are deliberately absent from this
-retrieval transport; they are an explicit CLI operation.
+Actions: status, search, read, current, page, range, summary (read-only —
+summary writes are a CLI operation, like bookmark changes). Parameters have the
+same names as the CLI, with underscores. Bookmark changes are deliberately
+absent from this retrieval transport; they are an explicit CLI operation.
 
 Responses use schema_version 1 and status ok, no_matches or blocked. A normal
 CLI blocked response exits 2; no_matches exits 0. The stream continues after a

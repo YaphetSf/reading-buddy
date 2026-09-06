@@ -10,6 +10,8 @@ from .boundary import ReadingError
 
 HOME = ".reading"  # the runtime's conventional folder inside a book workspace
 
+DEFAULT_SUMMARY_BUDGET = 12000  # additive book.json key; absent means the default
+
 
 @dataclass(frozen=True)
 class BookConfig:
@@ -24,6 +26,7 @@ class BookConfig:
     part_marker: re.Pattern | None   # structural section markers, not content
     part_marker_source: str | None
     annotations: dict | None  # {"directory", "ranges", "url_base"}; absent = none
+    summary_budget: int = DEFAULT_SUMMARY_BUDGET  # summary.json character budget
 
 
 def _relative(root, value):
@@ -66,6 +69,9 @@ def load_config(root):
                 raise ValueError
         part_source = state.get("part_marker")
         part_marker = re.compile("(?m)^" + part_source + "[ \t]*\r?\n?") if part_source else None
+        summary_budget = state.get("summary_budget", DEFAULT_SUMMARY_BUDGET)
+        if type(summary_budget) is not int or not 100 <= summary_budget <= 10 ** 7:
+            raise ValueError
         annotations = state.get("annotations")
         if annotations is not None:
             ranges = annotations["ranges"]
@@ -86,4 +92,4 @@ def load_config(root):
     return BookConfig(root, state["title"], dict(documents), tuple(page_range),
                       root / HOME / "bookmark.json",
                       state.get("note"), state.get("calibration"), state.get("alignment"),
-                      part_marker, part_source, annotations)
+                      part_marker, part_source, annotations, summary_budget)

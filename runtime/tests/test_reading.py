@@ -14,8 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reading.boundary import ReadingError, load_boundary, normalized_spans, set_bookmark
 from reading.config import load_config
+from reading import summary as summary_module
 from reading.runtime import ReadingRuntime, _Snapshot
 from reading.sources import PageMap, wiki_passages
+from reading.summary import append_summary, replace_summary
 from reading.sync import alignment_pairs, probe
 
 
@@ -514,6 +516,203 @@ class TranslationSyncTests(unittest.TestCase):
         with self.assertRaises(ReadingError) as result:
             load_config(self.root)
         self.assertEqual(result.exception.code, "config_invalid")
+
+
+class SummaryTests(unittest.TestCase):
+    """Runtime-owned running summary: tiling, rollback hiding, staleness, budget."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        write_book(self.root)
+        (self.root / "source").mkdir(parents=True)
+        self.body = START + "\n" + ("A traveler studies maps and a cobalt compass. " * 80) + STOP
+        (self.root / "source/book_en.txt").write_text(self.body + UNREAD, encoding="utf-8")
+        self.config = load_config(self.root)
+        set_bookmark(self.config, 50, STOP, start=START)
+
+    def append(self, text="A quiet recap of the invented traveler so far.", tile=12000):
+        with patch.object(summary_module, "TILE", tile):
+            return append_summary(self.config, text)
+
+    def read_summary(self, **kwargs):
+        return ReadingRuntime(self.config).request({"action": "summary", **kwargs})
+
+    def status(self):
+        return ReadingRuntime(self.config).request({"action": "status"})["summary"]
+
+    def set_budget(self, value):
+        book = json.loads((self.root / ".reading/book.json").read_text())
+        book["summary_budget"] = value
+        (self.root / ".reading/book.json").write_text(json.dumps(book))
+        self.config = load_config(self.root)
+
+    def test_append_stamps_runtime_coordinates_and_stops_at_bookmark(self):
+        result = self.append()
+        self.assertEqual(result["appended"]["chars"], [0, len(self.body)])
+        self.assertEqual(result["appended"]["level"], 0)
+        self.assertTrue(result["caught_up"])
+        with self.assertRaises(ReadingError) as again:
+            self.append()
+        self.assertEqual(again.exception.code, "summary_caught_up")
+        entries = self.read_summary()["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["chars"], [0, len(self.body)])
+
+    def test_catch_up_tiles_in_reading_order(self):
+        result = None
+        for expected in range(len(self.body) // 500 + 1):
+            result = self.append(tile=500)
+            self.assertEqual(result["appended"]["chars"],
+                             [expected * 500, min((expected + 1) * 500, len(self.body))])
+            if result["caught_up"]:
+                break
+        self.assertTrue(result["caught_up"])
+        entries = self.read_summary()["entries"]
+        self.assertEqual([entry["chars"] for entry in entries],
+                         [[i, min(i + 500, len(self.body))] for i in range(0, len(self.body), 500)])
+
+    def test_rollback_hides_entries_until_reading_catches_up(self):
+        milestone = "A unique milestone sentence appears here."
+        body = (START + "\n" + ("A traveler studies maps and a cobalt compass. " * 40)
+                + milestone + " " + ("More traveler prose fills the space. " * 40) + STOP)
+        (self.root / "source/book_en.txt").write_text(body + UNREAD, encoding="utf-8")
+        set_bookmark(self.config, 50, STOP, start=START)
+        while True:
+            result = self.append(tile=500)
+            if result["caught_up"]:
+                break
+        total = len(self.read_summary()["entries"])
+        rolled = set_bookmark(self.config, 49, milestone, start=START)
+        rolled_end = rolled.documents["text"].end
+        view = self.read_summary()
+        self.assertGreater(view["hidden"], 0)
+        self.assertEqual(view["hidden"] + len(view["entries"]), total)
+        self.assertTrue(all(chars[1] <= rolled_end for chars in
+                            (entry["chars"] for entry in view["entries"])))
+        set_bookmark(self.config, 50, STOP)
+        self.assertEqual(self.read_summary()["hidden"], 0)
+        with self.assertRaises(ReadingError) as again:
+            self.append()
+        self.assertEqual(again.exception.code, "summary_caught_up")
+
+    def test_source_change_makes_summary_stale_until_rebuilt(self):
+        self.append()
+        (self.root / "source/book_en.txt").write_text(
+            self.body + " Further allowed prose closes here." + UNREAD, encoding="utf-8")
+        set_bookmark(self.config, 50, "Further allowed prose closes here.")
+        view = self.read_summary()
+        self.assertEqual(view["error"]["code"], "summary_stale")
+        self.assertEqual(self.status(), {"available": False, "reason": "summary_stale"})
+
+    def test_over_budget_suggests_merge_and_replace_restores(self):
+        self.set_budget(100)
+        while True:
+            result = self.append(tile=500)
+            if result["caught_up"]:
+                break
+        view = self.read_summary()
+        self.assertTrue(view["over_budget"])
+        self.assertEqual(view["suggest_merge"], [1, 6])
+        backup = self.root / ".reading" / "summary.json.bak"
+        self.assertFalse(backup.exists())
+        result = replace_summary(self.config, "1-8", 1,
+                                 "One coarser recap replaces eight fine entries.")
+        self.assertTrue(backup.exists())
+        self.assertEqual(len(json.loads(backup.read_text())["entries"]), 8)
+        view = self.read_summary()
+        self.assertFalse(view["over_budget"])
+        self.assertEqual(len(view["entries"]), 1)
+        self.assertEqual(view["entries"][0]["level"], 1)
+        self.assertEqual(view["entries"][0]["chars"], [0, len(self.body)])
+
+    def test_replace_rejects_bad_requests(self):
+        self.append()
+        for span, level, text in [("0-1", 1, "A fine replacement entry text."),
+                                  ("1-2", 1, "A fine replacement entry text."),
+                                  ("1-1", 3, "A fine replacement entry text."),
+                                  ("1-1", 1, "too short"),
+                                  ("x-y", 1, "A fine replacement entry text.")]:
+            with self.subTest(span=span, level=level):
+                with self.assertRaises(ReadingError) as raised:
+                    replace_summary(self.config, span, level, text)
+                self.assertEqual(raised.exception.code, "invalid_request")
+
+    def test_markdown_export_lists_visible_entries(self):
+        (self.root / "source/pages.json").write_text(json.dumps({"calib": [[100, 4], [3000, 45]]}))
+        self.append(tile=2000)
+        view = self.read_summary(markdown=True)
+        self.assertIn("## 1. pp. 1–", view["markdown"])
+        self.assertIn("A quiet recap", view["markdown"])
+
+    def test_pages_are_null_without_calibration(self):
+        self.append()
+        self.assertIsNone(self.read_summary()["entries"][0]["pages"])
+
+    def test_status_reports_empty_summary_until_first_append(self):
+        self.assertEqual(self.status(), {"available": False, "reason": "empty"})
+        self.append()
+        reported = self.status()
+        self.assertTrue(reported["available"])
+        self.assertEqual(reported["entries"], 1)
+        self.assertFalse(reported["over_budget"])
+
+    def test_summary_budget_must_be_an_integer(self):
+        book = json.loads((self.root / ".reading/book.json").read_text())
+        book["summary_budget"] = "big"
+        (self.root / ".reading/book.json").write_text(json.dumps(book))
+        with self.assertRaises(ReadingError) as raised:
+            load_config(self.root)
+        self.assertEqual(raised.exception.code, "config_invalid")
+
+    def test_range_reads_in_order_and_stops_at_the_bookmark(self):
+        reader = ReadingRuntime(self.config)
+        blocked = reader.request({"action": "range", "from": len(self.body) + 5,
+                                  "to": len(self.body) + 100})
+        self.assertEqual(blocked["error"]["code"], "outside_bookmark")
+        tail = reader.request({"action": "range", "from": len(self.body) - 60, "to": 10 ** 9})
+        self.assertEqual(tail["citation"]["chars"], [len(self.body) - 60, len(self.body)])
+        self.assertTrue(tail["truncated"])
+        self.assertTrue(tail["text"].endswith(STOP))
+        head = reader.request({"action": "range", "from": 0, "to": 40, "max_chars": 64})
+        self.assertEqual(head["citation"]["chars"], [0, 40])
+        self.assertEqual(head["text"], self.body[:40])
+        clamped = reader.request({"action": "range", "from": 0, "to": 10 ** 9, "max_chars": 64})
+        self.assertEqual(clamped["citation"]["chars"], [0, 64])
+        self.assertTrue(clamped["truncated"])
+        self.assertNotIn("UNREAD_SENTINEL", json.dumps([blocked, tail, head, clamped]))
+
+    def test_serve_can_read_but_not_write_the_summary(self):
+        script = Path(__file__).resolve().parents[1] / "read.py"
+        process = subprocess.run(
+            [sys.executable, str(script), "--root", str(self.root), "serve"],
+            input=('{"action":"summary"}\n'
+                   '{"action":"summary","append":"A recap written over the transport."}\n'
+                   '{"action":"range","from":0,"to":40}\n'),
+            text=True, capture_output=True, check=True)
+        rows = [json.loads(line) for line in process.stdout.splitlines()]
+        self.assertEqual([row["status"] for row in rows], ["ok", "blocked", "ok"])
+        self.assertEqual(rows[1]["error"]["code"], "invalid_request")
+        self.assertEqual(rows[2]["citation"]["chars"], [0, 40])
+
+    def test_cli_append_and_markdown_export(self):
+        script = Path(__file__).resolve().parents[1] / "read.py"
+        first = subprocess.run(
+            [sys.executable, str(script), "--root", str(self.root), "summary",
+             "--append", "A quiet recap of the invented traveler so far."],
+            text=True, capture_output=True, check=True)
+        self.assertEqual(json.loads(first.stdout)["status"], "ok")
+        second = subprocess.run(
+            [sys.executable, str(script), "--root", str(self.root), "summary", "--markdown"],
+            text=True, capture_output=True, check=True)
+        payload = json.loads(second.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("A quiet recap", payload["markdown"])
+        status = subprocess.run(
+            [sys.executable, str(script), "--root", str(self.root), "status"],
+            text=True, capture_output=True, check=True)
+        self.assertTrue(json.loads(status.stdout)["summary"]["available"])
 
 
 if __name__ == "__main__":

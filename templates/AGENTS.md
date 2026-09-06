@@ -9,6 +9,9 @@ every discussion and every note in it, at any depth.
 - **Before discussing any content, load the `reading-buddy` skill and run `status`.**
   The full protocol lives there. This file is only the always-on floor.
 - Never hand-edit `.reading/bookmark.json`; it is runtime-owned state.
+- `.reading/summary.json` is the agent's running memory — runtime-owned like
+  the bookmark. Never hand-edit it, and treat its entries as claims to verify
+  against the original text, not facts.
 - Never grep or open `source/` directly, nor any annotation file or index that
   crosses the bookmark. Query through the runtime, which serves only what is read.
 - Default to description, not interpretation. No themes, verdicts, or forward
