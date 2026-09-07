@@ -97,51 +97,47 @@ def _suggest_merge(items, overage):
     return [run[0], run[-1]] if len(run) >= 2 else None
 
 
-def read_summary(config, markdown=False):
-    boundary = load_boundary(config)
-    document = boundary.documents["text"]
+def _payload(config, boundary):
+    """Visible entries and their accounting: the one shape the summary is reported in."""
     _, state = _read_state(config)
     if state is None:
-        payload = {"entries": [], "hidden": 0, "chars": 0,
-                   "budget": config.summary_budget, "over_budget": False}
-    else:
-        _check_source(config, state)
-        entries = _validated_entries(state)
-        visible = _visible(entries, document)
-        chars = sum(len(entry["text"]) for entry in visible)
-        payload = {"entries": [{"index": number,
-                                "chars": [entry["source_start"], entry["source_end"]],
-                                "pages": entry["pages"], "level": entry["level"],
-                                "text": entry["text"]}
-                               for number, entry in enumerate(visible, 1)],
-                   "hidden": len(entries) - len(visible), "chars": chars,
-                   "budget": config.summary_budget, "over_budget": chars > config.summary_budget}
-        if payload["over_budget"]:
-            suggestion = _suggest_merge(payload["entries"], chars - config.summary_budget)
-            if suggestion:
-                payload["suggest_merge"] = suggestion
+        return {"entries": [], "hidden": 0, "chars": 0,
+                "budget": config.summary_budget, "over_budget": False}
+    _check_source(config, state)
+    entries = _validated_entries(state)
+    visible = _visible(entries, boundary.documents["text"])
+    chars = sum(len(entry["text"]) for entry in visible)
+    payload = {"entries": [{"index": number,
+                            "chars": [entry["source_start"], entry["source_end"]],
+                            "pages": entry["pages"], "level": entry["level"],
+                            "text": entry["text"]}
+                           for number, entry in enumerate(visible, 1)],
+               "hidden": len(entries) - len(visible), "chars": chars,
+               "budget": config.summary_budget, "over_budget": chars > config.summary_budget}
+    if payload["over_budget"]:
+        suggestion = _suggest_merge(payload["entries"], chars - config.summary_budget)
+        if suggestion:
+            payload["suggest_merge"] = suggestion
+    return payload
+
+
+def read_summary(config, markdown=False):
+    boundary = load_boundary(config)
+    payload = _payload(config, boundary)
     if markdown:
         payload["markdown"] = _markdown(config, boundary, payload["entries"])
     return {"status": "ok", "bookmark": boundary.summary(), **payload}
 
 
 def status_info(config, boundary):
+    """Status carries the entries themselves; recalling them is not a second command."""
     try:
-        _, state = _read_state(config)
-        if state is None:
-            return {"available": False, "reason": "empty"}
-        _check_source(config, state)
-        entries = _validated_entries(state)
+        payload = _payload(config, boundary)
     except ReadingError as exc:
-        return {"available": False, "reason": exc.code}
-    visible = _visible(entries, boundary.documents["text"])
-    return {**_accounting(config, visible, len(entries) - len(visible)), "available": True}
-
-
-def _accounting(config, entries, hidden):
-    chars = sum(len(entry["text"]) for entry in entries)
-    return {"entries": len(entries), "hidden": hidden, "chars": chars,
-            "budget": config.summary_budget, "over_budget": chars > config.summary_budget}
+        return {"available": False, "reason": exc.code, "entries": []}
+    if not payload["entries"]:
+        return {"available": False, "reason": "empty", **payload}
+    return {"available": True, **payload}
 
 
 def _markdown(config, boundary, items):

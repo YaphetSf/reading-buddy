@@ -36,11 +36,12 @@ Run from the book workspace:
     python3 $RB/read.py read "<returned id>" --before 800 --after 800
     python3 $RB/read.py summary
 
-- Start a sitting with status and current. Search for a specific passage before
-  explaining it; request more context using its returned id.
+- Start a sitting with status and current. Status returns the running summary
+  itself (see below), so a sitting begins with it loaded. Search for a specific
+  passage before explaining it; request more context using its returned id.
 - `range` reads the allowed slice in order between two offsets, for catch-up
-  summaries and compression re-reads. `summary` loads the running summary
-  (see below).
+  summaries and compression re-reads. `summary` re-reads the running summary
+  after a write, and exports it.
 - Default search requires all words. Use mode any for alternatives or phrase for
   quotations. Phrase matching tolerates line wrapping, case, typographic quotes
   and Unicode compatibility characters.
@@ -121,7 +122,9 @@ and reports progress in the original language only. After every original bookmar
 
 `.reading/summary.json` is the agent's memory between sessions: model-authored
 entries under runtime custody. The runtime owns every coordinate — the agent
-supplies only prose.
+supplies only prose. `status` carries the visible entries and their accounting
+in the same shape the `summary` read returns, so recalling them is never a
+second command the agent can skip.
 
     python3 $RB/read.py summary
     python3 $RB/read.py summary --append "<what happened in that slice>"

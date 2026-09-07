@@ -604,7 +604,8 @@ class SummaryTests(unittest.TestCase):
         set_bookmark(self.config, 50, "Further allowed prose closes here.")
         view = self.read_summary()
         self.assertEqual(view["error"]["code"], "summary_stale")
-        self.assertEqual(self.status(), {"available": False, "reason": "summary_stale"})
+        self.assertEqual(self.status(),
+                         {"available": False, "reason": "summary_stale", "entries": []})
 
     def test_over_budget_suggests_merge_and_replace_restores(self):
         self.set_budget(100)
@@ -650,13 +651,17 @@ class SummaryTests(unittest.TestCase):
         self.append()
         self.assertIsNone(self.read_summary()["entries"][0]["pages"])
 
-    def test_status_reports_empty_summary_until_first_append(self):
-        self.assertEqual(self.status(), {"available": False, "reason": "empty"})
-        self.append()
+    def test_status_carries_the_summary_entries_themselves(self):
+        empty = self.status()
+        self.assertEqual((empty["available"], empty["reason"], empty["entries"]),
+                         (False, "empty", []))
+        self.append(text="A quiet recap naming the cobalt compass.")
         reported = self.status()
         self.assertTrue(reported["available"])
-        self.assertEqual(reported["entries"], 1)
         self.assertFalse(reported["over_budget"])
+        self.assertEqual([entry["text"] for entry in reported["entries"]],
+                         ["A quiet recap naming the cobalt compass."])
+        self.assertEqual(reported["entries"], self.read_summary()["entries"])
 
     def test_summary_budget_must_be_an_integer(self):
         book = json.loads((self.root / ".reading/book.json").read_text())

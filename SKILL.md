@@ -12,11 +12,10 @@ is the leak, not the source.
 ## Before anything else
 
 Run `status`. It reports the bookmark, which sources are anchored, whether page
-lookup is available, and the state of your running summary. If it returns
+lookup is available, and your running summary in full — those entries are your
+memory of the book between sessions, and the corpus is not. If it returns
 `blocked`, resolve the boundary with the reader — never estimate a safe cutoff,
-never fall back to memory, never read the corpus directly. If `status` reports
-an available summary, run `summary` and load it: those entries are your memory
-of the book between sessions. The corpus is not.
+never fall back to memory, never read the corpus directly.
 
 If the workspace has no `.reading/book.json`, this is a new book: read
 `references/setup.md` and run the setup wizard.
@@ -87,10 +86,15 @@ When the reader reports new progress:
 ## The agent's own summary
 
 `.reading/summary.json` is your memory between sessions: runtime-owned entries
-summarizing the original text in reading order. It loads with `summary`, and its
+summarizing the original text in reading order. It arrives with `status`, and its
 entries are claims with coordinates — before telling the reader anything an
 entry asserts, ground it in retrieved original text. Commentary, never narrative
 fact.
+
+Search is lexical, so the entries are your only index over what a span was
+about. Before answering a question your queries did not resolve — and before
+telling the reader that something appears only once, or not at all — read the
+entries covering the relevant spans and re-read those spans with `range`.
 
 When the summary trails the bookmark — first setup, a long gap, or the reader
 asks you to catch up — read the un-summarized stretch for real and summarize it
